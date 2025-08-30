@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package hello;
+
+option go_package = "./hello";
+
+// Simple greeting request message
+message HelloRequest {
+    string name = 1;
+    int32 age = 2;
+    repeated string hobbies = 3;
+}
+
+// Simple greeting response message
+message HelloResponse {
+    string message = 1;
+    int64 timestamp = 2;
+    bool success = 3;
+}
+
+// User profile message for testing nested structures
+message UserProfile {
+    string id = 1;
+    string email = 2;
+    HelloRequest basic_info = 3;
+    map<string, string> metadata = 4;
+}
+
+// Simple greeting service
+service HelloService {
+    // Say hello to a person
+    rpc SayHello(HelloRequest) returns (HelloResponse);
+    
+    // Get user profile
+    rpc GetProfile(HelloRequest) returns (UserProfile);
+    
+    // Streaming example
+    rpc StreamMessages(stream HelloRequest) returns (stream HelloResponse);
+}

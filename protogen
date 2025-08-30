@@ -1,0 +1,427 @@
+#!/bin/bash
+
+# Protobuf Generator CLI
+# A convenient CLI tool for generating protobuf files using Docker
+
+set -euo pipefail
+
+readonly SCRIPT_NAME="$(basename "$0")"
+readonly DOCKER_IMAGE="protobuf-generator"
+readonly VERSION="2.0.0"
+
+# Default values
+DEFAULT_LANG="go"
+DEFAULT_GO_VERSION="latest"
+DEFAULT_PROTOC_VERSION="latest"
+DEFAULT_PROTOC_GEN_GO_VERSION="latest"
+DEFAULT_PROTOC_GEN_GO_GRPC_VERSION="latest"
+DEFAULT_PROTO_FILE_NAME="*.proto"
+DEFAULT_DEBUG="0"
+
+# Colors for output
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly NC='\033[0m' # No Color
+
+# Print colored output
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1" >&2
+}
+
+# Show help
+show_help() {
+    cat << EOF
+Protobuf Generator CLI v${VERSION}
+
+Generate protobuf files for various languages using Docker.
+
+USAGE:
+    $SCRIPT_NAME [OPTIONS] <source_path> [output_path]
+
+ARGUMENTS:
+    <source_path>    Directory containing .proto files (required)
+    [output_path]    Output directory for generated files (defaults to source_path)
+
+OPTIONS:
+    -l, --lang LANG                 Target language (default: ${DEFAULT_LANG})
+    -g, --go-version VERSION        Go version to use (default: ${DEFAULT_GO_VERSION})
+    -t, --protoc-version VERSION    protoc version (default: ${DEFAULT_PROTOC_VERSION})
+    -f, --file PATTERN              Proto file pattern (default: ${DEFAULT_PROTO_FILE_NAME})
+    -p, --protoc-gen-go VERSION     protoc-gen-go version (default: ${DEFAULT_PROTOC_GEN_GO_VERSION})
+    -r, --protoc-gen-go-grpc VERSION protoc-gen-go-grpc version (default: ${DEFAULT_PROTOC_GEN_GO_GRPC_VERSION})
+    -d, --debug                     Enable debug mode
+    -c, --check-compatibility       Check compatibility for Go version
+    -v, --version                   Show version information
+    -h, --help                      Show this help message
+
+EXAMPLES:
+    # Generate from proto/ directory
+    $SCRIPT_NAME proto/
+    
+    # Generate with specific output directory
+    $SCRIPT_NAME proto/ generated/
+    
+    # Generate specific file
+    $SCRIPT_NAME proto/ --file user.proto
+    
+    # Use specific Go version
+    $SCRIPT_NAME proto/ --go-version 1.20
+    
+    # Enable debug mode
+    $SCRIPT_NAME proto/ --debug
+    
+    # Full example with all options
+    $SCRIPT_NAME proto/ generated/ \\
+        --lang go \\
+        --go-version 1.21 \\
+        --protoc-version 24.4 \\
+        --file "*.proto" \\
+        --protoc-gen-go v1.31.0 \\
+        --protoc-gen-go-grpc v1.3.0 \\
+        --debug
+
+ENVIRONMENT VARIABLES:
+    You can also use environment variables instead of command-line options:
+    - PROTOBUF_LANG
+    - PROTOBUF_GO_VERSION
+    - PROTOBUF_PROTOC_VERSION
+    - PROTOBUF_PROTOC_GEN_GO_VERSION
+    - PROTOBUF_PROTOC_GEN_GO_GRPC_VERSION
+    - PROTOBUF_DEBUG
+
+EOF
+}
+
+# Show version
+show_version() {
+    echo "Protobuf Generator CLI v${VERSION}"
+}
+
+# Convert relative path to absolute and handle Windows Docker paths
+get_absolute_path() {
+    local path="$1"
+    
+    if [[ "$path" = /* ]]; then
+        # Already absolute
+        local abs_path="$path"
+    else
+        # Make it absolute
+        abs_path="$(cd "$(dirname "$path")" && pwd)/$(basename "$path")"
+    fi
+    
+    # Handle Git Bash on Windows - convert /c/... to C:/...
+    if [[ "$OSTYPE" == "msys" ]] || [[ "$MSYSTEM" != "" ]]; then
+        # Convert /d/path to /d/path format for Docker on Windows
+        echo "$abs_path"
+    else
+        echo "$abs_path"
+    fi
+}
+
+# Validate directory exists
+validate_directory() {
+    local dir="$1"
+    local name="$2"
+    
+    if [[ ! -d "$dir" ]]; then
+        print_error "$name directory does not exist: $dir"
+        exit 1
+    fi
+}
+
+# Check if Docker is available
+check_docker() {
+    if ! command -v docker >/dev/null 2>&1; then
+        print_error "Docker is not installed or not available in PATH"
+        exit 1
+    fi
+    
+    if ! docker info >/dev/null 2>&1; then
+        print_error "Docker is not running or not accessible"
+        exit 1
+    fi
+}
+
+# Check if Docker image exists
+check_docker_image() {
+    if ! docker image inspect "$DOCKER_IMAGE" >/dev/null 2>&1; then
+        print_error "Docker image '$DOCKER_IMAGE' not found"
+        print_info "Please build the image first:"
+        print_info "  docker build -t $DOCKER_IMAGE ."
+        exit 1
+    fi
+}
+
+# Check compatibility and exit
+check_compatibility_and_exit() {
+    local go_version="$1"
+    
+    print_info "Checking compatibility for Go $go_version..."
+    
+    # Source the compatibility matrix (simplified version)
+    local protoc_gen_go_version
+    local protoc_gen_go_grpc_version
+    local protoc_version
+    
+    case "${go_version}" in
+        "1.25"|"latest")
+            protoc_version="28.3"
+            protoc_gen_go_version="v1.35.2"
+            protoc_gen_go_grpc_version="v1.5.1"
+            ;;
+        "1.24"|"1.23")
+            protoc_version="25.1"
+            protoc_gen_go_version="v1.34.2"
+            protoc_gen_go_grpc_version="v1.5.1"
+            ;;
+        "1.22"|"1.21")
+            protoc_version="24.4"
+            protoc_gen_go_version="v1.31.0"
+            protoc_gen_go_grpc_version="v1.3.0"
+            ;;
+        "1.20"|"1.19")
+            protoc_version="23.4"
+            protoc_gen_go_version="v1.28.1"
+            protoc_gen_go_grpc_version="v1.2.0"
+            ;;
+        "1.18"|"1.17")
+            protoc_version="21.12"
+            protoc_gen_go_version="v1.27.1"
+            protoc_gen_go_grpc_version="v1.1.0"
+            ;;
+        *)
+            protoc_version="21.12"
+            protoc_gen_go_version="v1.27.1"
+            protoc_gen_go_grpc_version="v1.1.0"
+            ;;
+    esac
+    
+    print_success "Compatible versions for Go $go_version:"
+    echo "  protoc: $protoc_version"
+    echo "  protoc-gen-go: $protoc_gen_go_version"
+    echo "  protoc-gen-go-grpc: $protoc_gen_go_grpc_version"
+    echo ""
+    print_info "Use these versions with:"
+    echo "  ./protogen <path> --go-version $go_version --protoc-version $protoc_version --protoc-gen-go $protoc_gen_go_version --protoc-gen-go-grpc $protoc_gen_go_grpc_version"
+    
+    exit 0
+}
+
+# Parse command line arguments
+parse_args() {
+    local source_path=""
+    local output_path=""
+    local lang="${PROTOBUF_LANG:-$DEFAULT_LANG}"
+    local go_version="${PROTOBUF_GO_VERSION:-$DEFAULT_GO_VERSION}"
+    local protoc_version="${PROTOBUF_PROTOC_VERSION:-$DEFAULT_PROTOC_VERSION}"
+    local protoc_gen_go_version="${PROTOBUF_PROTOC_GEN_GO_VERSION:-$DEFAULT_PROTOC_GEN_GO_VERSION}"
+    local protoc_gen_go_grpc_version="${PROTOBUF_PROTOC_GEN_GO_GRPC_VERSION:-$DEFAULT_PROTOC_GEN_GO_GRPC_VERSION}"
+    local proto_file_name="$DEFAULT_PROTO_FILE_NAME"
+    local debug="${PROTOBUF_DEBUG:-$DEFAULT_DEBUG}"
+    local check_compatibility=false
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -l|--lang)
+                lang="$2"
+                shift 2
+                ;;
+            -g|--go-version)
+                go_version="$2"
+                shift 2
+                ;;
+            -t|--protoc-version)
+                protoc_version="$2"
+                shift 2
+                ;;
+            -f|--file)
+                proto_file_name="$2"
+                shift 2
+                ;;
+            -p|--protoc-gen-go)
+                protoc_gen_go_version="$2"
+                shift 2
+                ;;
+            -r|--protoc-gen-go-grpc)
+                protoc_gen_go_grpc_version="$2"
+                shift 2
+                ;;
+            -d|--debug)
+                debug="1"
+                shift
+                ;;
+            -c|--check-compatibility)
+                check_compatibility=true
+                shift
+                ;;
+            -v|--version)
+                show_version
+                exit 0
+                ;;
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -*)
+                print_error "Unknown option: $1"
+                print_info "Use '$SCRIPT_NAME --help' for usage information"
+                exit 1
+                ;;
+            *)
+                if [[ -z "$source_path" ]]; then
+                    source_path="$1"
+                elif [[ -z "$output_path" ]]; then
+                    output_path="$1"
+                else
+                    print_error "Too many arguments: $1"
+                    print_info "Use '$SCRIPT_NAME --help' for usage information"
+                    exit 1
+                fi
+                shift
+                ;;
+        esac
+    done
+    
+    
+    # Handle compatibility check after all arguments are parsed
+    if [[ "$check_compatibility" == true ]]; then
+        check_compatibility_and_exit "$go_version"
+    fi
+    
+    # Validate required arguments
+    if [[ -z "$source_path" ]]; then
+        print_error "Source path is required"
+        print_info "Use '$SCRIPT_NAME --help' for usage information"
+        exit 1
+    fi
+    
+    # Default output path to source path
+    if [[ -z "$output_path" ]]; then
+        output_path="$source_path"
+    fi
+    
+    # Convert to absolute paths
+    source_path=$(get_absolute_path "$source_path")
+    output_path=$(get_absolute_path "$output_path")
+    
+    # Validate directories
+    validate_directory "$source_path" "Source"
+    
+    # Create output directory if it doesn't exist
+    if [[ ! -d "$output_path" ]]; then
+        print_info "Creating output directory: $output_path"
+        mkdir -p "$output_path"
+    fi
+    
+    # Export for Docker
+    export SOURCE_PATH="$source_path"
+    export OUTPUT_PATH="$output_path"
+    export LANG="$lang"
+    export GO_VERSION="$go_version"
+    export PROTOC_VERSION="$protoc_version"
+    export PROTOC_GEN_GO_VERSION="$protoc_gen_go_version"
+    export PROTOC_GEN_GO_GRPC_VERSION="$protoc_gen_go_grpc_version"
+    export PROTO_FILE_NAME="$proto_file_name"
+    export DEBUG="$debug"
+}
+
+# Generate unique container name
+generate_container_name() {
+    local timestamp=$(date +%s)
+    local random=$(shuf -i 1000-9999 -n 1 2>/dev/null || echo $RANDOM)
+    echo "protobuf-gen-${timestamp}-${random}"
+}
+
+# Run protobuf generation
+run_generation() {
+    local container_name
+    container_name=$(generate_container_name)
+    
+    print_info "Starting protobuf generation..."
+    print_info "Language: $LANG"
+    print_info "Go Version: $GO_VERSION"
+    print_info "Protoc Version: $PROTOC_VERSION"
+    print_info "Source: $SOURCE_PATH"
+    print_info "Output: $OUTPUT_PATH"
+    print_info "File Pattern: $PROTO_FILE_NAME"
+    
+    if [[ "$DEBUG" == "1" ]]; then
+        print_info "Debug mode enabled"
+    fi
+    
+    # Prepare Docker command with shared volumes for caching
+    local docker_cmd=(
+        "docker" "run"
+        "--name" "$container_name"
+        "--rm"
+        "-v" "${SOURCE_PATH}:/home/src"
+        "-v" "protobuf-gobrew:/root/.gobrew"
+        "-v" "protobuf-go:/home/go"
+        "-e" "LANG=$LANG"
+        "-e" "GO_VERSION=$GO_VERSION"
+        "-e" "PROTOC_VERSION=$PROTOC_VERSION"
+        "-e" "PROTOC_GEN_GO_VERSION=$PROTOC_GEN_GO_VERSION"
+        "-e" "PROTOC_GEN_GO_GRPC_VERSION=$PROTOC_GEN_GO_GRPC_VERSION"
+        "-e" "PROTO_FILE_PATH=."
+        "-e" "PROTO_FILE_NAME=$PROTO_FILE_NAME"
+        "-e" "DEBUG=$DEBUG"
+    )
+    
+    # Add output directory mount if different from source
+    if [[ "$SOURCE_PATH" != "$OUTPUT_PATH" ]]; then
+        docker_cmd+=("-v" "${OUTPUT_PATH}:/home/out")
+        docker_cmd+=("-e" "PROTO_OUT_PATH=/home/out")
+    else
+        docker_cmd+=("-e" "PROTO_OUT_PATH=.")
+    fi
+    
+    # Add the Docker image
+    docker_cmd+=("$DOCKER_IMAGE")
+    
+    # Run Docker command
+    # On Windows Git Bash, disable path conversion for Docker
+    if [[ "$OSTYPE" == "msys" ]] || [[ "$MSYSTEM" != "" ]]; then
+        MSYS_NO_PATHCONV=1 "${docker_cmd[@]}"
+    else
+        "${docker_cmd[@]}"
+    fi
+    
+    local exit_code=$?
+    if [[ $exit_code -eq 0 ]]; then
+        print_success "Protobuf generation completed successfully!"
+        print_info "Generated files are in: $OUTPUT_PATH"
+    else
+        print_error "Protobuf generation failed with exit code: $exit_code"
+        exit $exit_code
+    fi
+}
+
+# Main function
+main() {
+    # Check prerequisites
+    check_docker
+    check_docker_image
+    
+    # Parse arguments
+    parse_args "$@"
+    
+    # Run generation
+    run_generation
+}
+
+# Run main function
+main "$@"
