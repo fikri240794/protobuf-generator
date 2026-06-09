@@ -65,8 +65,8 @@ docker run --rm \
 | Variable                     | Description                                                                                           | Default  |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------- | -------- |
 | `GO_VERSION`                 | Version of Go to use (managed by [gobrew](https://github.com/kevincobain2000/gobrew)). e.g., `1.23.0` | `latest` |
-| `PROTOC_GEN_GO_VERSION`      | Version for the `protoc-gen-go` plugin.                                                               | `latest` |
-| `PROTOC_GEN_GO_GRPC_VERSION` | Version for the `protoc-gen-go-grpc` plugin.                                                          | `latest` |
+| `PROTOC_GEN_GO_VERSION`      | Version of the [google.golang.org/protobuf/cmd/protoc-gen-go](https://pkg.go.dev/google.golang.org/protobuf/cmd/protoc-gen-go) package. | `latest` |
+| `PROTOC_GEN_GO_GRPC_VERSION` | Version of the [google.golang.org/grpc/cmd/protoc-gen-go-grpc](https://pkg.go.dev/google.golang.org/grpc/cmd/protoc-gen-go-grpc) package. | `latest` |
 
 ---
 
