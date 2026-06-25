@@ -45,6 +45,20 @@ docker run --rm \
     protobuf-generator
 ```
 
+> [!IMPORTANT]
+> **For Windows (Git Bash / MSYS2) users:**
+> If you're using **Git Bash**, prefix the command with `MSYS_NO_PATHCONV=1` to prevent path conversion issues:
+> ```bash
+> MSYS_NO_PATHCONV=1 docker run --rm \
+>     -v protobuf-generator:/root \
+>     -v .:/home/src \
+>     -e TARGET_LANG=go \
+>     -e PROTO_FILE_PATH=protofilepath \
+>     -e PROTO_OUT_PATH=protooutpath \
+>     protobuf-generator
+> ```
+> **Windows CMD** or **PowerShell** users can run the command as-is without any prefix.
+
 > [!TIP]
 > **What is `-v protobuf-generator:/root`?**
 > This creates a persistent "Docker Volume" named `protobuf-generator`. It safely stores the downloaded `protoc` and language binaries so they are never re-downloaded, making your generations extremely fast!
